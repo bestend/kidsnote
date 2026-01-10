@@ -1,7 +1,8 @@
 import json
 import asyncio
 import re
-from dataclasses import dataclass
+import platform
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -14,17 +15,31 @@ from loguru import logger
 from playwright.async_api import async_playwright, Request
 from tqdm.asyncio import tqdm
 
-logger.add("kidsnote_download.log", rotation="10 MB")
-
 app = typer.Typer(help="키즈노트 앨범 미디어 다운로더")
+
 
 KIDSNOTE_LOGIN_URL = "https://www.kidsnote.com/login"
 KIDSNOTE_ALBUM_API = "https://www.kidsnote.com/api/v1_3/children/{child_id}/albums/"
 
-# 설정 폴더 구조
-DATA_DIR = Path(".kidsnote")
-SESSION_FILE = DATA_DIR / "session.json"
-CONFIG_FILE = DATA_DIR / "config.json"
+# 전역 설정 폴더 (~/.config/kidsnote/)
+CONFIG_DIR = Path.home() / ".config" / "kidsnote"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+SESSION_FILE = CONFIG_DIR / "session.json"
+
+# 로그 파일도 설정 폴더에 저장
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+logger.add(CONFIG_DIR / "download.log", rotation="10 MB")
+
+
+def get_default_download_dir() -> str:
+    """OS별 기본 다운로드 경로를 반환합니다."""
+    system = platform.system()
+    if system == "Windows":
+        return str(Path.home() / "Pictures" / "kidsnote")
+    elif system == "Darwin":  # macOS
+        return str(Path.home() / "Pictures" / "kidsnote")
+    else:  # Linux
+        return str(Path.home() / "Pictures" / "kidsnote")
 
 
 @dataclass
@@ -45,6 +60,52 @@ class ChildConfig:
     @classmethod
     def from_dict(cls, data: dict) -> "ChildConfig":
         return cls(data["child_id"], data["center"], data["cls"], data.get("name", ""))
+
+
+@dataclass
+class AppConfig:
+    """전역 앱 설정"""
+
+    download_dir: str = ""
+    children: list = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.download_dir:
+            self.download_dir = get_default_download_dir()
+
+    def to_dict(self) -> dict:
+        return {
+            "download_dir": self.download_dir,
+            "children": [
+                c.to_dict() if isinstance(c, ChildConfig) else c for c in self.children
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AppConfig":
+        children = [ChildConfig.from_dict(c) for c in data.get("children", [])]
+        return cls(
+            download_dir=data.get("download_dir", get_default_download_dir()),
+            children=children,
+        )
+
+    @classmethod
+    def load(cls) -> "AppConfig":
+        if not CONFIG_FILE.exists():
+            return cls()
+        try:
+            data = json.loads(CONFIG_FILE.read_text())
+            return cls.from_dict(data)
+        except (json.JSONDecodeError, IOError):
+            return cls()
+
+    def save(self):
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2))
+
+    def get_child_data_dir(self, child_id: int) -> Path:
+        """아이별 데이터 폴더 경로를 반환합니다."""
+        return CONFIG_DIR / "children" / str(child_id)
 
 
 @dataclass
@@ -140,22 +201,50 @@ class KidsnoteAuth:
             self._cookies = await context.cookies()
             await browser.close()
 
+        # 아이 이름 가져오기 (API 호출)
+        if captured_configs and self._cookies:
+            await self._fetch_child_names(captured_configs)
+
         self._child_configs = captured_configs
         self._save_session()
         self._save_config()
 
         return self._cookies, self._child_configs
 
+    async def _fetch_child_names(self, configs: list[ChildConfig]):
+        """API를 통해 아이 이름을 가져옵니다."""
+        cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in self._cookies)
+        headers = {"Cookie": cookie_header}
+
+        async with aiohttp.ClientSession() as session:
+            for config in configs:
+                try:
+                    url = (
+                        f"https://www.kidsnote.com/api/v1_3/children/{config.child_id}/"
+                    )
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            name = data.get("name", "")
+                            if name:
+                                config.name = name
+                                logger.info(
+                                    f"아이 이름 확인됨: {name} (child={config.child_id})"
+                                )
+                except Exception as e:
+                    logger.warning(f"아이 이름 가져오기 실패: {config.child_id} - {e}")
+
     def _save_session(self):
-        DATA_DIR.mkdir(exist_ok=True)
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         SESSION_FILE.write_text(json.dumps(self._cookies, ensure_ascii=False, indent=2))
         logger.info(f"세션 저장됨: {SESSION_FILE}")
 
     def _save_config(self):
-        DATA_DIR.mkdir(exist_ok=True)
-        data = [c.to_dict() for c in self._child_configs]
-        CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-        logger.info(f"아이 설정 저장됨: {CONFIG_FILE} ({len(data)}명)")
+        # 기존 설정 로드 후 children만 업데이트
+        app_config = AppConfig.load()
+        app_config.children = self._child_configs
+        app_config.save()
+        logger.info(f"아이 설정 저장됨: {CONFIG_FILE} ({len(self._child_configs)}명)")
 
     def load_session(self) -> list[dict] | None:
         if not SESSION_FILE.exists():
@@ -167,13 +256,8 @@ class KidsnoteAuth:
             return None
 
     def load_config(self) -> list[ChildConfig]:
-        if not CONFIG_FILE.exists():
-            return []
-        try:
-            data = json.loads(CONFIG_FILE.read_text())
-            return [ChildConfig.from_dict(c) for c in data]
-        except (json.JSONDecodeError, IOError):
-            return []
+        app_config = AppConfig.load()
+        return app_config.children
 
 
 class KidsnoteClient:
@@ -264,7 +348,8 @@ def login():
     if configs:
         logger.info(f"로그인 완료! {len(configs)}명의 아이 정보가 저장되었습니다.")
         for i, c in enumerate(configs):
-            logger.info(f"  [{i}] child={c.child_id}, center={c.center}, cls={c.cls}")
+            name_info = f" ({c.name})" if c.name else ""
+            logger.info(f"  [{i}] child={c.child_id}{name_info}")
     else:
         logger.warning(
             "아이 정보를 감지하지 못했습니다. 앨범 페이지를 방문했는지 확인하세요."
@@ -273,7 +358,7 @@ def login():
 
 def get_child_data_dir(child_id: int) -> Path:
     """아이별 데이터 폴더 경로를 반환합니다."""
-    return DATA_DIR / "children" / str(child_id)
+    return CONFIG_DIR / "children" / str(child_id)
 
 
 def get_child_label(config: ChildConfig, index: int) -> str:
@@ -318,36 +403,60 @@ def list_children():
         label = get_child_label(c, i)
         typer.echo(f"  {label}{status}")
 
-    typer.echo(f"\n사용법: uv run python main.py fetch --index <번호>")
-    typer.echo(f"        uv run python main.py download --index <번호>")
-    typer.echo(f"        또는 --all 옵션으로 모든 아이 처리\n")
+    typer.echo(f"\n사용법: uv run main.py fetch --index <번호>")
+    typer.echo(f"        uv run main.py download --index <번호>\n")
 
 
-@app.command(name="rename")
-def rename_child(
-    child_index: Annotated[int, typer.Argument(help="아이 인덱스")],
-    name: Annotated[str, typer.Argument(help="아이 이름")],
+@app.command(name="config")
+def configure(
+    download_dir: Annotated[
+        str, typer.Option("--download-dir", "-d", help="다운로드 저장 폴더")
+    ] = "",
+    show: Annotated[bool, typer.Option("--show", "-s", help="현재 설정 표시")] = False,
 ):
-    """아이에게 이름을 지정합니다."""
-    auth = KidsnoteAuth()
-    configs = auth.load_config()
+    """다운로드 경로 등 설정을 관리합니다."""
+    app_config = AppConfig.load()
 
-    if not configs:
-        logger.error("저장된 아이 정보가 없습니다.")
-        raise typer.Exit(1)
+    # 설정 표시
+    typer.echo(f"\n현재 설정:")
+    typer.echo(f"  설정 파일: {CONFIG_FILE}")
+    typer.echo(f"  다운로드 경로: {app_config.download_dir}")
+    typer.echo(f"  등록된 아이: {len(app_config.children)}명\n")
 
-    if child_index >= len(configs):
-        logger.error(f"잘못된 인덱스입니다. 0~{len(configs) - 1} 사이로 지정하세요.")
-        raise typer.Exit(1)
+    # --show만 있으면 표시 후 종료
+    if show and not download_dir:
+        return
 
-    configs[child_index].name = name
+    # 대화형으로 경로 설정
+    if not download_dir:
+        default_dir = app_config.download_dir
+        typer.echo(f"다운로드 경로를 설정합니다.")
+        typer.echo(f"기본값: {default_dir}")
+        new_dir = typer.prompt(
+            "경로 입력 (Enter: 기본값 유지)", default="", show_default=False
+        )
 
-    # 직접 저장
-    DATA_DIR.mkdir(exist_ok=True)
-    data = [c.to_dict() for c in configs]
-    CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        if new_dir:
+            download_dir = new_dir
+        else:
+            return
 
-    logger.info(f"아이 [{child_index}]의 이름을 '{name}'으로 설정했습니다.")
+    if download_dir:
+        # 경로 확장 및 검증
+        expanded_path = Path(download_dir).expanduser()
+
+        if not expanded_path.exists():
+            create = typer.confirm(f"'{expanded_path}' 폴더가 없습니다. 생성할까요?")
+            if create:
+                expanded_path.mkdir(parents=True, exist_ok=True)
+                logger.info(f"폴더 생성됨: {expanded_path}")
+            else:
+                logger.error("경로가 존재하지 않습니다.")
+                raise typer.Exit(1)
+
+        app_config.download_dir = str(expanded_path)
+        app_config.save()
+        logger.info(f"다운로드 경로 설정됨: {app_config.download_dir}")
 
 
 def get_album_stats(data: dict) -> str:
@@ -433,8 +542,11 @@ def download(
         int, typer.Option("--index", "-n", help="특정 아이 인덱스 (-1: 전체)")
     ] = -1,
     output_dir: Annotated[
-        Path, typer.Option("--output", "-o", help="다운로드 저장 폴더")
-    ] = Path("~/Pictures/kidsnote"),
+        str,
+        typer.Option(
+            "--output", "-o", help="다운로드 저장 폴더 (미지정 시 설정값 사용)"
+        ),
+    ] = "",
     timeout: Annotated[
         int, typer.Option("--timeout", "-t", help="파일당 타임아웃 (초)")
     ] = 60,
@@ -446,6 +558,7 @@ def download(
     ] = False,
 ):
     """앨범 미디어를 다운로드합니다."""
+    app_config = AppConfig.load()
     auth = KidsnoteAuth()
     cookies = auth.load_session()
     configs = auth.load_config()
@@ -463,7 +576,16 @@ def download(
         logger.error(f"잘못된 인덱스입니다. 0~{len(configs) - 1} 사이로 지정하세요.")
         raise typer.Exit(1)
 
-    output_base = output_dir.expanduser()
+    # 다운로드 경로: CLI 옵션 > 설정 파일
+    download_path = output_dir if output_dir else app_config.download_dir
+    output_base = Path(download_path).expanduser()
+
+    if not output_base.exists():
+        logger.error(f"다운로드 경로가 없습니다: {output_base}")
+        logger.info("'uv run main.py config' 명령어로 경로를 설정하세요.")
+        raise typer.Exit(1)
+
+    logger.info(f"다운로드 경로: {output_base}")
     total_success, total_failed = 0, 0
 
     for idx, config in targets_with_index:
