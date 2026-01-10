@@ -1,0 +1,12 @@
+[project]
+name = "kidsnote"
+version = "0.1.0"
+description = "Download kidsnote album images and videos to local storage"
+requires-python = ">=3.14"
+dependencies = [
+    "aiohttp>=3.9.0",
+    "aiofiles>=24.1.0",
+    "tqdm>=4.66.0",
+    "typer>=0.12.0",
+    "loguru>=0.7.0",
+]
