@@ -2,10 +2,12 @@ import json
 import asyncio
 import re
 import platform
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlparse, parse_qs
 
 import aiohttp
@@ -15,20 +17,106 @@ from loguru import logger
 from playwright.async_api import async_playwright, Request
 from tqdm.asyncio import tqdm
 
+from kd import __version__
+
 app = typer.Typer(help="키즈노트 앨범 미디어 다운로더")
 
 
 KIDSNOTE_LOGIN_URL = "https://www.kidsnote.com/login"
 KIDSNOTE_ALBUM_API = "https://www.kidsnote.com/api/v1_3/children/{child_id}/albums/"
+GITHUB_REPO = "bestend/kidsnote"
+GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 # 전역 설정 폴더 (~/.config/kidsnote/)
 CONFIG_DIR = Path.home() / ".config" / "kidsnote"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 SESSION_FILE = CONFIG_DIR / "session.json"
+UPDATE_CHECK_FILE = CONFIG_DIR / "update_check.json"
 
 # 로그 파일도 설정 폴더에 저장
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 logger.add(CONFIG_DIR / "download.log", rotation="10 MB")
+
+
+def parse_version(version: str) -> tuple[int, ...]:
+    clean = version.lstrip("v")
+    parts = []
+    for part in clean.split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+CACHE_TTL_24_HOURS = 86400
+
+
+def check_for_updates() -> tuple[bool, str | None]:
+    import urllib.request
+    import urllib.error
+
+    now = datetime.now()
+
+    if UPDATE_CHECK_FILE.exists():
+        try:
+            cache = json.loads(UPDATE_CHECK_FILE.read_text())
+            last_check = datetime.fromisoformat(cache.get("last_check", ""))
+            if (now - last_check).total_seconds() < CACHE_TTL_24_HOURS:
+                cached_latest = cache.get("latest_version")
+                if cached_latest:
+                    has_update = parse_version(cached_latest) > parse_version(
+                        __version__
+                    )
+                    return (has_update, cached_latest) if has_update else (False, None)
+                return (False, None)
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+
+    try:
+        req = urllib.request.Request(
+            GITHUB_API_RELEASES,
+            headers={
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "kd-updater",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            latest_version = data.get("tag_name", "").lstrip("v")
+
+            if latest_version:
+                cache = {
+                    "last_check": now.isoformat(),
+                    "latest_version": latest_version,
+                }
+                UPDATE_CHECK_FILE.write_text(json.dumps(cache, indent=2))
+
+                if parse_version(latest_version) > parse_version(__version__):
+                    return (True, latest_version)
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, OSError):
+        pass
+
+    return (False, None)
+
+
+def show_update_notice():
+    try:
+        has_update, latest_version = check_for_updates()
+        if has_update and latest_version:
+            typer.echo()
+            typer.secho(
+                f"  🆕 새 버전이 있습니다: v{__version__} → v{latest_version}",
+                fg=typer.colors.YELLOW,
+                bold=True,
+            )
+            typer.secho(
+                "     업데이트: kd update",
+                fg=typer.colors.YELLOW,
+            )
+            typer.echo()
+    except Exception:
+        pass
 
 
 def get_default_download_dir() -> str:
@@ -635,6 +723,73 @@ def download(
         logger.info(f"전체 완료: {total_success}개 성공, {total_failed}개 실패")
 
     raise typer.Exit(0 if total_failed == 0 else 1)
+
+
+@app.command()
+def update(
+    force: Annotated[
+        bool, typer.Option("--force", "-f", help="캐시 무시하고 강제 업데이트")
+    ] = False,
+):
+    """kd를 최신 버전으로 업데이트합니다."""
+    typer.echo(f"현재 버전: v{__version__}")
+
+    if UPDATE_CHECK_FILE.exists() and force:
+        UPDATE_CHECK_FILE.unlink()
+
+    has_update, latest_version = check_for_updates()
+
+    if not has_update:
+        if latest_version:
+            typer.secho(
+                f"✅ 이미 최신 버전입니다. (v{latest_version})", fg=typer.colors.GREEN
+            )
+        else:
+            typer.secho("✅ 이미 최신 버전입니다.", fg=typer.colors.GREEN)
+        return
+
+    typer.echo(f"새 버전 발견: v{latest_version}")
+    typer.echo("업데이트를 진행합니다...")
+
+    try:
+        result = subprocess.run(
+            ["uv", "tool", "upgrade", "kd"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            if UPDATE_CHECK_FILE.exists():
+                UPDATE_CHECK_FILE.unlink()
+            typer.secho(
+                f"✅ v{latest_version}으로 업데이트 완료!", fg=typer.colors.GREEN
+            )
+            typer.echo("새 버전을 사용하려면 터미널을 다시 열거나 다시 실행하세요.")
+        else:
+            typer.secho("❌ 업데이트 실패", fg=typer.colors.RED)
+            if result.stderr:
+                typer.echo(result.stderr)
+            typer.echo("\n수동 업데이트:")
+            typer.echo("  uv tool upgrade kd")
+            raise typer.Exit(1)
+    except FileNotFoundError:
+        typer.secho("❌ uv가 설치되어 있지 않습니다.", fg=typer.colors.RED)
+        typer.echo("\nuv 설치 후 다시 시도하세요:")
+        typer.echo("  curl -LsSf https://astral.sh/uv/install.sh | sh")
+        raise typer.Exit(1)
+
+
+@app.command()
+def version():
+    """현재 버전을 표시합니다."""
+    typer.echo(f"kd v{__version__}")
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context):
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+    elif ctx.invoked_subcommand not in ("update", "version"):
+        show_update_notice()
 
 
 if __name__ == "__main__":
