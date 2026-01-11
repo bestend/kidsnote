@@ -237,7 +237,7 @@ def parse_media_items(json_data: dict) -> list[MediaItem]:
 
 class KidsnoteAuth:
     def __init__(self):
-        self._cookies: list[dict] = []
+        self._cookies: list[Any] = []
         self._child_configs: list[ChildConfig] = []
 
     async def login_interactive(self) -> tuple[list[dict], list[ChildConfig]]:
