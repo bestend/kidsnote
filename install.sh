@@ -56,6 +56,9 @@ if command -v kd &> /dev/null; then
     echo "  kd fetch      # 앨범 목록 가져오기"
     echo "  kd download   # 다운로드"
     echo ""
+    echo "  kd update     # 최신 버전으로 업데이트"
+    echo "  kd version    # 현재 버전 확인"
+    echo ""
 else
     warn "kd command not found in PATH."
     warn "Add ~/.local/bin to your PATH:"
