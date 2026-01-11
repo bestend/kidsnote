@@ -1,8 +1,27 @@
 [project]
-name = "kidsnote"
+name = "kd"
 version = "0.1.0"
-description = "Download kidsnote album images and videos to local storage"
-requires-python = ">=3.14"
+description = "키즈노트 앨범 다운로더 - Download kidsnote album photos and videos"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "John Kim", email = "infend@gmail.com"}
+]
+keywords = ["kidsnote", "album", "downloader", "photos", "videos"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Graphics",
+]
 dependencies = [
     "aiohttp>=3.9.0",
     "aiofiles>=24.1.0",
@@ -11,3 +30,18 @@ dependencies = [
     "loguru>=0.7.0",
     "playwright>=1.40.0",
 ]
+
+[project.scripts]
+kd = "kd.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/bestend/kidsnote"
+Repository = "https://github.com/bestend/kidsnote"
+Issues = "https://github.com/bestend/kidsnote/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kd"]

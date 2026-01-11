@@ -1,31 +1,33 @@
-# 키즈노트 앨범 다운로더
+# kd - 키즈노트 앨범 다운로더
 
 키즈노트에서 아이의 앨범 사진과 동영상을 일괄 다운로드하는 CLI 도구입니다.
 
 ## 특징
 
-- 브라우저 자동화를 통한 간편한 로그인
-- 여러 아이 지원 (자동 감지, 이름 자동 추출)
-- 비동기 다운로드로 빠른 속도 (최대 20개 동시 다운로드)
-- 날짜별 폴더 자동 정리 (`YYYY/MM/DD`)
-- 이미 다운로드된 파일 자동 스킵
-- 전역 설정 저장 (`~/.config/kidsnote/`)
+- 🚀 한 줄 설치
+- 🔐 브라우저 자동화를 통한 간편한 로그인
+- 👶 여러 아이 지원 (자동 감지, 이름 자동 추출)
+- ⚡ 비동기 다운로드로 빠른 속도 (최대 20개 동시 다운로드)
+- 📁 날짜별 폴더 자동 정리 (`YYYY/MM/DD`)
+- ✅ 이미 다운로드된 파일 자동 스킵
 
 ## 설치
 
 ```bash
-# uv 설치 (없는 경우)
+curl -fsSL https://raw.githubusercontent.com/bestend/kidsnote/main/install.sh | bash
+```
+
+또는 수동 설치:
+
+```bash
+# uv 설치
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 프로젝트 클론
-git clone https://github.com/bestend/kidsnote.git
-cd kidsnote
-
-# 의존성 설치
-uv sync
+# kd 설치
+uv tool install git+https://github.com/bestend/kidsnote.git
 
 # Playwright 브라우저 설치
-uv run playwright install chromium
+uv tool run --from git+https://github.com/bestend/kidsnote.git playwright install chromium
 ```
 
 ## 사용법
@@ -33,7 +35,7 @@ uv run playwright install chromium
 ### 1. 로그인
 
 ```bash
-uv run main.py login
+kd login
 ```
 
 - 브라우저가 열리고 키즈노트 로그인 페이지로 이동합니다
@@ -44,7 +46,7 @@ uv run main.py login
 ### 2. 다운로드 경로 설정
 
 ```bash
-uv run main.py config
+kd config
 ```
 
 - 현재 설정을 확인하고 다운로드 경로를 설정합니다
@@ -52,16 +54,16 @@ uv run main.py config
 
 ```bash
 # 설정만 확인
-uv run main.py config --show
+kd config --show
 
 # 직접 경로 지정
-uv run main.py config --download-dir ~/Downloads/kidsnote
+kd config --download-dir ~/Downloads/kidsnote
 ```
 
 ### 3. 아이 목록 확인
 
 ```bash
-uv run main.py list
+kd list
 ```
 
 저장된 아이 목록과 상태를 확인합니다:
@@ -75,20 +77,20 @@ uv run main.py list
 ### 4. 앨범 목록 가져오기
 
 ```bash
-uv run main.py fetch
+kd fetch
 ```
 
 기본적으로 모든 아이의 앨범을 가져옵니다.
 
 ```bash
 # 특정 아이만
-uv run main.py fetch --index 0
+kd fetch --index 0
 ```
 
 ### 5. 다운로드
 
 ```bash
-uv run main.py download
+kd download
 ```
 
 기본적으로 모든 아이의 앨범을 설정된 경로에 다운로드합니다.
@@ -102,35 +104,35 @@ uv run main.py download
 
 ```bash
 # 모든 아이 다운로드 (기본)
-uv run main.py download
+kd download
 
 # 특정 아이만
-uv run main.py download --index 0
+kd download --index 0
 
 # 다른 폴더에 저장 (일회성)
-uv run main.py download --output ~/Downloads/kidsnote
+kd download --output ~/Downloads/kidsnote
 
 # 파일 목록만 확인
-uv run main.py download --dry-run
+kd download --dry-run
 ```
 
 ## 전체 워크플로우
 
 ```bash
 # 1. 로그인 (최초 1회 또는 세션 만료 시)
-uv run main.py login
+kd login
 
 # 2. 다운로드 경로 설정
-uv run main.py config
+kd config
 
 # 3. 아이 목록 확인
-uv run main.py list
+kd list
 
 # 4. 앨범 목록 가져오기
-uv run main.py fetch
+kd fetch
 
 # 5. 다운로드
-uv run main.py download
+kd download
 ```
 
 ## 폴더 구조
@@ -170,28 +172,12 @@ uv run main.py download
     └── ...
 ```
 
-## config.json 형식
-
-```json
-{
-  "download_dir": "/Users/username/Pictures/kidsnote",
-  "children": [
-    {
-      "child_id": 1234567,
-      "center": 12345,
-      "cls": 123456,
-      "name": "홍길동"
-    }
-  ]
-}
-```
-
 ## 문제 해결
 
 ### 로그인 세션이 만료됨
 
 ```bash
-uv run main.py login
+kd login
 ```
 
 ### 아이 정보가 감지되지 않음
@@ -201,7 +187,7 @@ uv run main.py login
 ### 다운로드 경로가 없음
 
 ```bash
-uv run main.py config
+kd config
 ```
 
 ### 다운로드가 느림
@@ -209,12 +195,20 @@ uv run main.py config
 동시 다운로드 수를 조정해보세요:
 
 ```bash
-uv run main.py download --concurrent 10
+kd download --concurrent 10
 ```
 
 ### 이미 다운로드된 파일
 
 같은 경로에 파일이 존재하면 자동으로 스킵됩니다. 재다운로드하려면 해당 파일을 삭제하세요.
+
+### kd 명령어를 찾을 수 없음
+
+PATH에 `~/.local/bin`을 추가하세요:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ## 라이선스
 

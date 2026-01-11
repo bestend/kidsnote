@@ -403,8 +403,8 @@ def list_children():
         label = get_child_label(c, i)
         typer.echo(f"  {label}{status}")
 
-    typer.echo(f"\n사용법: uv run main.py fetch --index <번호>")
-    typer.echo(f"        uv run main.py download --index <번호>\n")
+    typer.echo(f"\n사용법: kd fetch --index <번호>")
+    typer.echo(f"        kd download --index <번호>\n")
 
 
 @app.command(name="config")
@@ -582,7 +582,7 @@ def download(
 
     if not output_base.exists():
         logger.error(f"다운로드 경로가 없습니다: {output_base}")
-        logger.info("'uv run main.py config' 명령어로 경로를 설정하세요.")
+        logger.info("'kd config' 명령어로 경로를 설정하세요.")
         raise typer.Exit(1)
 
     logger.info(f"다운로드 경로: {output_base}")
