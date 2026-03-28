@@ -145,9 +145,97 @@ class ChildConfig:
             "name": self.name,
         }
 
+    def merge(self, other: "ChildConfig") -> "ChildConfig":
+        return ChildConfig(
+            child_id=self.child_id,
+            center=self.center or other.center,
+            cls=self.cls or other.cls,
+            name=self.name or other.name,
+        )
+
     @classmethod
     def from_dict(cls, data: dict) -> "ChildConfig":
-        return cls(data["child_id"], data["center"], data["cls"], data.get("name", ""))
+        return cls(
+            data["child_id"],
+            int(data.get("center", 0) or 0),
+            int(data.get("cls", 0) or 0),
+            data.get("name", ""),
+        )
+
+
+def merge_child_configs(configs: list[ChildConfig]) -> list[ChildConfig]:
+    merged: dict[int, ChildConfig] = {}
+    for config in configs:
+        existing = merged.get(config.child_id)
+        merged[config.child_id] = config if existing is None else existing.merge(config)
+    return list(merged.values())
+
+
+def build_album_params(config: ChildConfig, page_size: int = 10000) -> dict:
+    params = {
+        "tz": "Asia/Seoul",
+        "page_size": page_size,
+        "child": config.child_id,
+    }
+    if config.center > 0:
+        params["center"] = config.center
+    if config.cls > 0:
+        params["cls"] = config.cls
+    return params
+
+
+def build_album_request_configs(
+    config: ChildConfig, page_size: int = 10000
+) -> list[dict]:
+    requests = []
+    current_params = build_album_params(config, page_size=page_size)
+    if current_params.get("center") and current_params.get("cls"):
+        requests.append(current_params)
+    requests.append(
+        {
+            "tz": "Asia/Seoul",
+            "page_size": page_size,
+            "child": config.child_id,
+        }
+    )
+    return requests
+
+
+def _album_entry_key(entry: dict) -> tuple:
+    if "id" in entry:
+        return ("id", entry["id"])
+    images = tuple(
+        img.get("original", "")
+        for img in entry.get("attached_images", [])
+        if img.get("original")
+    )
+    video = (entry.get("attached_video") or {}).get("high", "")
+    return ("fallback", entry.get("created", ""), images, video)
+
+
+def merge_album_results(results_list: list[dict]) -> dict:
+    merged: dict[tuple, dict] = {}
+    for data in results_list:
+        for entry in data.get("results", []):
+            merged[_album_entry_key(entry)] = entry
+
+    merged_results = sorted(
+        merged.values(),
+        key=lambda entry: entry.get("created", ""),
+        reverse=True,
+    )
+    return {
+        "count": len(merged_results),
+        "next": None,
+        "previous": None,
+        "results": merged_results,
+    }
+
+
+def format_album_fetch_stats(
+    current_count: int, past_count: int, merged_count: int
+) -> str:
+    return f"현재 {current_count}개, 추억 {past_count}개, 합계 {merged_count}개"
 
 
 @dataclass
@@ -171,7 +259,9 @@ class AppConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
-        children = [ChildConfig.from_dict(c) for c in data.get("children", [])]
+        children = merge_child_configs(
+            [ChildConfig.from_dict(c) for c in data.get("children", [])]
+        )
         return cls(
             download_dir=data.get("download_dir", get_default_download_dir()),
             children=children,
@@ -245,7 +335,7 @@ class KidsnoteAuth:
         logger.info("브라우저를 열어 로그인을 진행합니다...")
         logger.info("로그인 후 아이를 선택하고 앨범 페이지로 이동해주세요.")
 
-        captured_configs: list[ChildConfig] = []
+        captured_configs: dict[int, ChildConfig] = {}
 
         async def handle_request(request: Request):
             url = request.url
@@ -260,11 +350,15 @@ class KidsnoteAuth:
                     cls = int(qs.get("cls", [0])[0])
 
                     config = ChildConfig(child_id, center, cls)
-                    if config not in captured_configs:
-                        captured_configs.append(config)
+                    existing = captured_configs.get(child_id)
+                    merged = config if existing is None else existing.merge(config)
+                    captured_configs[child_id] = merged
+
+                    if existing is None or merged != existing:
                         logger.info(
-                            f"아이 정보 감지됨: child={child_id}, center={center}, cls={cls}"
+                            f"아이 정보 감지됨: child={child_id}, center={merged.center}, cls={merged.cls}"
                         )
+                    logger.debug(f"앨범 요청 URL: {url}")
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=False)
@@ -290,10 +384,11 @@ class KidsnoteAuth:
             await browser.close()
 
         # 아이 이름 가져오기 (API 호출)
-        if captured_configs and self._cookies:
-            await self._fetch_child_names(captured_configs)
+        configs = list(captured_configs.values())
+        if configs and self._cookies:
+            await self._fetch_child_names(configs)
 
-        self._child_configs = captured_configs
+        self._child_configs = merge_child_configs(configs)
         self._save_session()
         self._save_config()
 
@@ -352,21 +447,30 @@ class KidsnoteClient:
     def __init__(self, cookies: list[dict]):
         self._cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
 
-    async def fetch_albums(self, config: ChildConfig, page_size: int = 10000) -> dict:
+    async def fetch_albums(
+        self, config: ChildConfig, page_size: int = 10000
+    ) -> tuple[dict, dict]:
         url = KIDSNOTE_ALBUM_API.format(child_id=config.child_id)
-        params = {
-            "tz": "Asia/Seoul",
-            "page_size": page_size,
-            "center": config.center,
-            "cls": config.cls,
-            "child": config.child_id,
-        }
         headers = {"Cookie": self._cookie_header}
 
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, headers=headers) as resp:
-                resp.raise_for_status()
-                return await resp.json()
+            results = []
+            request_configs = build_album_request_configs(config, page_size=page_size)
+            for params in request_configs:
+                async with session.get(url, params=params, headers=headers) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    results.append(data)
+
+            merged = merge_album_results(results)
+            stats = {
+                "current_count": len(results[0].get("results", []))
+                if len(request_configs) > 1
+                else 0,
+                "past_count": len(results[-1].get("results", [])),
+                "merged_count": len(merged.get("results", [])),
+            }
+            return merged, stats
 
 
 class Downloader:
@@ -613,12 +717,15 @@ def fetch(
             return await client.fetch_albums(config)
 
         try:
-            data = asyncio.run(_fetch())
+            data, fetch_stats = asyncio.run(_fetch())
             child_dir = get_child_data_dir(config.child_id)
             child_dir.mkdir(parents=True, exist_ok=True)
             output = child_dir / "list.json"
             output.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-            logger.info(f"앨범 목록 저장됨: {output} ({get_album_stats(data)})")
+            logger.info(
+                f"앨범 목록 저장됨: {output} ({get_album_stats(data)}, "
+                f"{format_album_fetch_stats(**fetch_stats)})"
+            )
         except aiohttp.ClientError as e:
             logger.error(f"API 호출 실패: {e}")
             raise typer.Exit(1)
