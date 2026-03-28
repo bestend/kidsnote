@@ -15,31 +15,31 @@ class ChildConfigTests(unittest.TestCase):
     def test_merge_preserves_non_zero_center_and_cls(self):
         merged = merge_child_configs(
             [
-                ChildConfig(child_id=3354912, center=86516, cls=1238671, name=""),
-                ChildConfig(child_id=3354912, center=0, cls=0, name=""),
+                ChildConfig(child_id=1001, center=2001, cls=3001, name=""),
+                ChildConfig(child_id=1001, center=0, cls=0, name=""),
             ]
         )
 
         self.assertEqual(len(merged), 1)
-        self.assertEqual(merged[0].child_id, 3354912)
-        self.assertEqual(merged[0].center, 86516)
-        self.assertEqual(merged[0].cls, 1238671)
+        self.assertEqual(merged[0].child_id, 1001)
+        self.assertEqual(merged[0].center, 2001)
+        self.assertEqual(merged[0].cls, 3001)
 
     def test_build_album_params_omits_zero_center_and_cls(self):
-        params = build_album_params(ChildConfig(child_id=3354912, center=0, cls=0))
+        params = build_album_params(ChildConfig(child_id=1001, center=0, cls=0))
 
         self.assertEqual(
             params,
             {
                 "tz": "Asia/Seoul",
                 "page_size": 10000,
-                "child": 3354912,
+                "child": 1001,
             },
         )
 
     def test_build_album_request_configs_includes_current_and_past(self):
         configs = build_album_request_configs(
-            ChildConfig(child_id=3354912, center=86516, cls=1238671)
+            ChildConfig(child_id=1001, center=2001, cls=3001)
         )
 
         self.assertEqual(
@@ -48,14 +48,14 @@ class ChildConfigTests(unittest.TestCase):
                 {
                     "tz": "Asia/Seoul",
                     "page_size": 10000,
-                    "child": 3354912,
-                    "center": 86516,
-                    "cls": 1238671,
+                    "child": 1001,
+                    "center": 2001,
+                    "cls": 3001,
                 },
                 {
                     "tz": "Asia/Seoul",
                     "page_size": 10000,
-                    "child": 3354912,
+                    "child": 1001,
                 },
             ],
         )
@@ -98,21 +98,21 @@ class ChildConfigTests(unittest.TestCase):
             {
                 "download_dir": "/tmp/kidsnote",
                 "children": [
-                    {"child_id": 3354912, "center": 0, "cls": 0, "name": ""},
+                    {"child_id": 1001, "center": 0, "cls": 0, "name": ""},
                     {
-                        "child_id": 3354912,
-                        "center": 86516,
-                        "cls": 1238671,
-                        "name": "아이",
+                        "child_id": 1001,
+                        "center": 2001,
+                        "cls": 3001,
+                        "name": "테스트아이",
                     },
                 ],
             }
         )
 
         self.assertEqual(len(config.children), 1)
-        self.assertEqual(config.children[0].center, 86516)
-        self.assertEqual(config.children[0].cls, 1238671)
-        self.assertEqual(config.children[0].name, "아이")
+        self.assertEqual(config.children[0].center, 2001)
+        self.assertEqual(config.children[0].cls, 3001)
+        self.assertEqual(config.children[0].name, "테스트아이")
 
 
 if __name__ == "__main__":
